@@ -1,0 +1,5 @@
+{
+    "require": {
+        "saulmoralespa/deprisa-api-php": "dev-master"
+    }
+}
