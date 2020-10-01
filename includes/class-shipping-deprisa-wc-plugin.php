@@ -83,6 +83,7 @@ class Shipping_Deprisa_WC_plugin
         add_filter( 'woocommerce_shipping_methods', array( $this, 'shipping_deprisa_wc_add_method') );
         add_filter( 'woocommerce_checkout_fields', array($this, 'custom_woocommerce_fields'), 1000);
         add_filter( 'manage_edit-shop_order_columns', array($this, 'print_label'), 20 );
+        add_filter( 'woocommerce_validate_postcode', array($this, 'filter_woocommerce_validate_postcode'), 10, 3 );
 
         add_action( 'wp_ajax_deprisa_get_cities', array($this, 'deprisa_get_cities'));
         add_action( 'woocommerce_checkout_process', array($this, 'check_post_code'));
@@ -122,7 +123,10 @@ class Shipping_Deprisa_WC_plugin
 
     public function deprisa_get_cities()
     {
-        $state = $_REQUEST['state'];
+        if ( ! wp_verify_nonce( $_REQUEST['nonce'], 'shipping_deprisa_state_nonce' ) )
+            return;
+
+        $state = sanitize_text_field($_REQUEST['state']);
 
         $places = WC_States_Places_Colombia::get_places();
 
@@ -131,6 +135,12 @@ class Shipping_Deprisa_WC_plugin
 
     public function custom_woocommerce_fields($fields)
     {
+        $chosen_methods = WC()->session->get( 'chosen_shipping_methods' );
+        $chosen_shipping = $chosen_methods[0];
+
+        if ($chosen_shipping !== 'shipping_deprisa_wc')
+            return $fields;
+
         $fields['billing']['billing_postcode']['required'] = true;
         $fields['shipping']['shipping_postcode']['required'] = true;
 
@@ -186,15 +196,16 @@ class Shipping_Deprisa_WC_plugin
 
     public function check_post_code()
     {
-        $post_code = $_POST['billing_postcode'];
-        $state = $_POST['billing_state'];
-        $city = $_POST['billing_city'];
+        $post_code = sanitize_text_field($_POST['billing_postcode']);
+        $state = sanitize_text_field($_POST['billing_state']);
+        $city = sanitize_text_field($_POST['billing_city']);
 
         if(empty($post_code)) return;
+        if(!is_numeric($post_code)) return;
 
         $state = Shipping_Deprisa_WC::clean_string($city) === 'Bogota D.C' ? 'BOG' : $state;
 
-        if (strlen($post_code) !== 6 || ! $this->is_acepted_post_code($state, $post_code))
+        if (strlen($post_code) !== 6 || !$this->is_acepted_post_code($state, $post_code))
             wc_add_notice( __( '<p>Consulte su código postal en <a target="_blank" href="http://visor.codigopostal.gov.co/472/visor/">Visor Codigo Postal 4-72 </a></p>' ), 'error' );
     }
 
@@ -239,16 +250,16 @@ class Shipping_Deprisa_WC_plugin
 
     public function save_custom_shipping_option_to_products($post_id)
     {
-        $custom_price_product = $_POST['_shipping_custom_price_product_smp'];
+        $custom_price_product = sanitize_text_field($_POST['_shipping_custom_price_product_smp']);
         if( isset( $custom_price_product ) )
-            update_post_meta( $post_id, '_shipping_custom_price_product_smp', esc_attr( $custom_price_product ) );
+            update_post_meta( $post_id, '_shipping_custom_price_product_smp', $custom_price_product );
     }
 
     public function save_variation_settings_fields($post_id)
     {
-        $custom_variation_price_product = $_POST['_shipping_custom_price_product_smp'][ $post_id ];
+        $custom_variation_price_product = sanitize_text_field($_POST['_shipping_custom_price_product_smp'][ $post_id ]);
         if( ! empty( $custom_variation_price_product ) ) {
-            update_post_meta( $post_id, '_shipping_custom_price_product_smp', esc_attr( $custom_variation_price_product ) );
+            update_post_meta( $post_id, '_shipping_custom_price_product_smp', $custom_variation_price_product );
         }
     }
 
@@ -278,18 +289,33 @@ class Shipping_Deprisa_WC_plugin
         }
     }
 
+    public function filter_woocommerce_validate_postcode($valid, $postcode, $country)
+    {
+
+       $customer = WC()->customer;
+
+       $city = $customer->get_billing_city();
+       $state = $customer->get_billing_state();
+       $state = Shipping_Deprisa_WC::clean_string($city) === 'Bogota D.C' ? 'BOG' : $state;
+
+        if ($country === 'CO')
+            $valid = (bool)  !empty($state) ? $this->is_acepted_post_code($state, $postcode) : preg_match( '/^([0-9]{6})$/i', $postcode );
+        return $valid;
+    }
+
     public function deprisa_generate_label()
     {
         if ( ! wp_verify_nonce(  $_REQUEST['nonce'], 'shipping_deprisa_generate_label' ) )
             return;
 
-        $shipping_number = $_REQUEST['shipping_number'];
+        $shipping_number = sanitize_text_field($_REQUEST['shipping_number']);
+
+        if (!is_numeric($shipping_number)) return;
 
         $label_url = '';
 
         try{
 
-            $labels = [];
             $labels['ETIQUETA'] = [
                 'NUMERO_ENVIO' => $shipping_number,
                 'TIPO_IMPRESORA' => 'T'
@@ -297,7 +323,7 @@ class Shipping_Deprisa_WC_plugin
 
             $data = Shipping_Deprisa_WC::print_labels($labels);
 
-            if(empty($data)) wp_die();
+            if(empty($data)) return;
 
             $label = $data['RESPUESTA_ETIQUETAS']["ETIQUETA"];
 
@@ -308,11 +334,12 @@ class Shipping_Deprisa_WC_plugin
             $upload_dir = wp_upload_dir();
             $dir = $upload_dir['basedir'] . '/deprisa-labels/';
 
-            if (!is_dir($dir))
-                mkdir($dir,0755);
-            $label_file = file_put_contents("{$dir}$shipping_number.pdf", $bin);
+            require_once ABSPATH . 'wp-admin/includes/class-wp-filesystem-base.php';
+            require_once ABSPATH . 'wp-admin/includes/class-wp-filesystem-direct.php';
 
-            if ($label_file)
+            $wp_filesystem = new WP_Filesystem_Direct(null);
+
+            if (wp_mkdir_p($dir) && $wp_filesystem->put_contents("{$dir}$shipping_number.pdf", $bin))
                 $label_url = $upload_dir['baseurl'] . '/deprisa-labels/' . "$shipping_number.pdf";
 
         }catch (\Exception $exception){
@@ -337,7 +364,9 @@ class Shipping_Deprisa_WC_plugin
         if ( ! wp_verify_nonce(  $_REQUEST['nonce'], 'shipping_deprisa_tracking' ) )
             return;
 
-        $shipping_number = $_REQUEST['shipping_number'];
+        $shipping_number = sanitize_text_field($_REQUEST['shipping_number']);
+
+        if (!is($shipping_number)) return;
 
         $data = new stdClass;
 

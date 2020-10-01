@@ -175,7 +175,7 @@ class Shipping_Deprisa_WC extends WC_Shipping_Method_Shipping_Deprisa_WC
         try{
             $instance = new self();
             $res = $instance->deprisa->liquidation($params);
-            return $res;
+            return $res['RESPUESTA_COTIZACION'];
         }catch (\Exception $exception){
             shipping_deprisa_wc_sd()->log($exception->getMessage());
         }

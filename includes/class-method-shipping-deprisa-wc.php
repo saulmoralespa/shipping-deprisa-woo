@@ -112,19 +112,17 @@ class WC_Shipping_Method_Shipping_Deprisa_WC extends WC_Shipping_Method
 
         $params = array_merge($params, $data_products);
 
-        shipping_deprisa_wc_sd()->log($params);
-
         $data = Shipping_Deprisa_WC::liquidation($params);
 
         if (empty($data))
             return apply_filters( 'woocommerce_shipping_' . $this->id . '_is_available', false, $package, $this );
 
-        $data['TOTAL'] = $data['TOTAL']  == 0 && $this->is_test ? 5000 : $data['TOTAL'];
+        $total = $data['TOTAL'] == 0 && $this->is_test ? 5000 : $data['TOTAL'];
 
         $rate = array(
             'id'      => $this->id,
             'label'   => $this->title,
-            'cost'    => $data['TOTAL'],
+            'cost'    => $total,
             'package' => $package,
         );
 

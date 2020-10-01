@@ -29,6 +29,7 @@ wc_enqueue_js( "
             url: ajaxurl,
             data: {
             action: 'deprisa_get_cities',
+            nonce: $(this).data('nonce'),
             state
             },
             dataType: 'json',
@@ -110,7 +111,10 @@ return apply_filters(
                 'description' => __('Departamento del remitente (donde se encuentra ubicada la tienda)'),
                 'desc_tip' => true,
                 'default' => true,
-                'options'     => $states_arr
+                'options'     => $states_arr,
+                'custom_attributes' => array(
+                    'data-nonce' => wp_create_nonce( "shipping_deprisa_state_nonce")
+                )
             ),
             'city_sender' => array(
                 'title' => __('Ciudad del remitente'),
